@@ -1,0 +1,240 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+Function to scrape data from index tickers using the AlphaVantage API
+
+```{r eval=FALSE}
+library(AlphaVantageClient)
+scraping_index <- function(x){
+  y <- fetchSeries(function_nm = "TIME_SERIES_DAILY_ADJUSTED", symbol=x, 
+                   outputsize="full", datatype="json")
+  y <- y$xts_object
+  return (y)
+}
+
+sp500 <- scraping_index("^sp500tr")
+```
+
+Function to load local JSON currency data into R 
+
+```{r eval=FALSE}
+library(jsonlite)
+scraping_currency <- function(x){
+  a <- fromJSON(paste0(x,".json"))
+  a <- lapply(a,unlist)
+  a <- do.call(rbind, a[-1])
+  a <- as.xts(a)
+  return(a)
+}
+
+EURUSD <- scraping_currency("EURUSD")
+```
+
+Merger of datasets, interpolation for missing data and log differentiation
+
+```{r eval=FALSE}
+library(xts)
+stock_df <-merge.xts(sp500[,5],hsi[,5],eu50[,5],eu600[,5],dax[,5],cac[,1],asx[,1],shanghai[,5],EURUSD[,4],GBPUSD[,4],USDJPY[,4],Gold[,1],Brent[,1], all=T)
+
+stock_df[stock_df == 0] <- NA
+stock_df <- na_interpolation(stock_df,option="linear", maxgap=Inf)
+stock_log <- diff.xts(stock_df, lag = 1, log = T)
+```
+
+Cross-correlation function
+
+```{r eval=FALSE}
+ccf_function <- function(y,x,k){
+  x_cor <- stock_log[,x]
+  attr(x_cor, "frequency") <- 1
+  y_cor <- stock_log[,y]
+  attr(y_cor, "frequency") <- 1
+  return (ccf(drop(x_cor),drop(y_cor),lag.max=k,na.action=na.omit,plot=F))
+}
+
+# example
+ccf_function("sp500","hsi",5)$acf
+```
+
+Setup for simple machine learning model
+
+```{r eval=FALSE}
+library(caret)
+window.length <- 500
+horizon <- 10
+timeslices <- createTimeSlices(1:nrow(stocks),initialWindow = window.length, skip = horizon-1, horizon = horizon, fixedWindow = T)
+
+#cross-validation
+trControl <- trainControl(method = "timeslice", initialWindow = window.length, horizon = horizon, skip= horizon-1, fixedWindow = T, savePredictions = "final", p = 0.9, selectionFunction = "best", allowParallel = T)
+
+
+tuned <- function(method,grid){
+  stocks <- as.data.frame(stocks)
+  # Regression
+  tuned_RMSE <- train(x=stocks[,-c(1,11)],
+                      y=as.numeric(stocks$sp500),
+                      method = method,
+                      tuneGrid = grid,
+                      trControl = trControl,
+                      preProcess=c("center","scale"),
+                      metric='RMSE')
+  regr <- tuned_RMSE$results
+  tuned_RMSE$pred <- tuned_RMSE$pred[order(tuned_RMSE$pred$rowIndex),]
+  HighRMSE <- RMSE(tuned_RMSE$pred[Hi.quart.index.obs,"pred"], stocks[Hi.quart.index.obs,"sp500"], na.rm=T)
+  LowRMSE <- RMSE(tuned_RMSE$pred[Lo.quart.index.obs,"pred"], stocks[Lo.quart.index.obs,"sp500"], na.rm=T)
+  assign(paste0("predicted",method), tuned_RMSE$pred, envir = .GlobalEnv)
+  # Classification
+  tuned_accuracy <- train(x=stocks[,-c(1,11)],
+                        y=as.factor(stocks$spclass),
+                        method = method,
+                        tuneGrid = tuned_RMSE$bestTune,
+                        trControl = trControl,
+                        preProcess=c("center","scale"),
+                        metric='Accuracy')
+  acc <- tuned_accuracy$results[-c(1:length(tuned_accuracy$bestTune))]
+  assign(paste0(method),as.data.frame(rbind(tuned_accuracy$method,t(regr),LowRMSE, HighRMSE, t(acc))),envir = .GlobalEnv)
+  trControl$classProbs=TRUE
+  class <- train(x=stocks[,-c(1,11)],
+                 y=ifelse(stocks$spclass==1,"Yes","No"),
+                 method = method,
+                 tuneGrid = tuned_RMSE$bestTune,
+                 trControl = trControl, preProcess=c("center","scale"),
+                 metric='Accuracy')
+  assign(paste0("ClassProb",method),class$pred$Yes, envir = .GlobalEnv)
+}
+
+# example
+
+tuned("svmLinear",expand.grid(C=0.01))
+
+```
+
+ROC plot
+
+```{r eval=FALSE}
+libary(ROCR)
+roc <- function(x,method){
+  plot(performance(prediction(x,stocks$spclass[c(501:4900)]),"tpr","fpr"), main=paste0("ROC Curves ",method))
+  abline(0,1,lty=2,col="red")
+}
+
+# example with the class probabilities of SVM
+
+roc(ClassProbsvmLinear[,1],"")
+
+```
+
+Recurrent Neural Network parameters
+
+```{r eval=FALSE}
+library(keras)
+library(tensorflow)
+library(caret)
+
+window.length <- 500
+horizon <- 10
+n_batch <- 10
+n_epoch <- window.length/n_batch
+n_neurons <- 9
+timeslices <- createTimeSlices(1:nrow(stocks),initialWindow = window.length, skip = horizon-1, horizon = horizon, fixedWindow = T)
+
+es <- callback_early_stopping(monitor = "loss", 
+                              verbose = 1, patience = 25, 
+                              restore_best_weights = T)
+```
+
+Long Short Term Memory - Classification
+
+```{r eval=FALSE}
+# model architecture
+
+model <- keras_model_sequential()
+model %>% layer_lstm(units = n_neurons, batch_input_shape = c(n_batch, 1, 9), activation = "tanh", return_sequences = F, stateful= T, trainable=T)
+model %>% layer_dense(units = 1, activation = "sigmoid")
+model %>% keras:::compile.keras.engine.training.Model(
+  optimizer = "nadam",
+  loss = "binary_crossentropy",
+  metrics = "binary_accuracy"
+)
+````
+
+LSTM - Regression
+
+```{r eval=FALSE}
+model <- keras_model_sequential()
+model %>% layer_lstm(units = n_neurons, batch_input_shape = c(n_batch, 1, 9), activation = "tanh", return_sequences = F, stateful= T, trainable=T)
+model %>% layer_dense(units = 1, activation = "linear")
+
+model %>% keras:::compile.keras.engine.training.Model(
+  optimizer = "nadam",
+  loss = "mean_squared_error"
+)
+```
+
+Gated Recurrent Unit - Classification
+
+```{r eval=FALSE}
+model <- keras_model_sequential()
+model %>% layer_GRU(units = n_neurons, batch_input_shape = c(n_batch, 1, 9), return_sequences = F, activation = "relu", stateful = T, reset_after = T, trainable = T)
+model %>% layer_dense(units = 1, activation = "sigmoid")
+
+model %>% keras:::compile.keras.engine.training.Model(
+  optimizer = "nadam",
+  loss = "binary_crossentropy",
+  metrics = "binary_accuracy"
+)
+```
+
+GRU - Regression
+
+```{r eval=FALSE}
+model <- keras_model_sequential()
+model %>% layer_gru(units = n_neurons,batch_input_shape = c(n_batch, 1, 9), return_sequences = F, activation = "relu",
+                    stateful = T, reset_after = T, trainable = T)
+model %>% layer_dense(units = 1, activation = "linear")
+
+model %>% keras:::compile.keras.engine.training.Model(
+  optimizer = "nadam",
+  loss = "mean_squared_error"
+)
+```
+
+Train the model and test the predictions, slice for slice
+
+```{r eval=FALSE}
+# save three data series: class/value predicition, accuracy over test set and predicted class probability (only when classifying)
+
+outputClass <- rep(0, nrow(stocks))
+outputAccuracy <- rep(0, length(testslices))
+outputProba <- rep(0, nrow(stocks))
+
+# Training
+
+for (i in 1:length(trainslices)){
+  X_train <- scale(X[trainslices[[i]]], center = T, scale = T)
+  preproc_X <- preProcess(as.matrix(X_train))
+  X_train <- array(X_train, dim=c(length(trainslices[[1]]),1,ncol(X)))
+  X_test <- array(predict(preproc_X, X[testslices[[i]]]), dim=c(length(testslices[[1]]),1,ncol(X)))
+  Y_train <- array(Y_class[trainslices[[i]]], dim = c(length(trainslices[[1]]),1))
+  Y_test <- array(Y_class[testslices[[i]]], dim = c(length(testslices[[1]]),1))
+  model %>% keras:::fit.keras.engine.training.Model(
+    X_train, Y_train, epochs = n_epoch, batch_size = n_batch, 
+    shuffle = F, verbose = 0, callbacks = es
+  )
+  pred <- model %>% keras:::predict_classes(
+    X_test, batch_size = n_batch,  verbose = 0
+  )
+  outputClass[testslices[[i]]] <- pred
+  # the following two only when classifying
+      proba <- model %>% keras:::predict.keras.engine.training.Model(
+        X_test, batch_size = n_batch, verbose = 0
+      )
+      acc <- model %>% keras:::evaluate.keras.engine.training.Model(
+        X_test, Y_test, batch_size = n_batch, verbose=1
+      )
+      outputProba[testslices[[i]]] <- proba
+      outputAccuracy[i] <- acc[[2]]
+}
+```

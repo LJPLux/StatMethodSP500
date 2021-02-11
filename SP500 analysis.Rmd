@@ -1,0 +1,681 @@
+---
+title: "SP500 analysis"
+output: github_document
+---
+
+#Scrape the data
+
+```{r setup, eval=F}
+knitr::opts_chunk$set(error = TRUE)
+```
+
+Historical prices are either scraped via AlphaVantage or downloadeded from Yahoo!Finance as .xlsx or.json and imported into R
+
+```{r include=TRUE, echo=FALSE}
+library(ggplot2)
+library(AlphaVantageClient)
+library(stats)
+library(zoo)
+library(openxlsx)
+library(xts)
+library(imputeTS)
+library(jsonlite)
+
+setAPIKey("0L5Z4NE0KRJNL31A")
+scraping_ind <- function(x){
+  y <- fetchSeries(function_nm = "TIME_SERIES_DAILY_ADJUSTED", symbol=x, 
+                   outputsize="full", datatype="json")
+  y <- y$xts_object
+  return (y)
+}
+
+sp500 <- scraping_ind("^sp500tr")
+dax <- scraping_ind("^gdaxi")
+eu50 <- scraping_ind("^stoxx50e")
+ftse <- read.xlsx("FTSE100.xlsx", colNames = T, rowNames = T)
+ftse <- as.xts(ftse)
+# cac <- scraping("^FCHI")
+cac <- read.xlsx("CAC40.xlsx", colNames = T, rowNames = T)
+cac <- as.xts(cac)
+eu600 <- scraping_ind("^stoxx")
+nikkei <- read.xlsx("Nikkei225.xlsx", colNames = T, rowNames = T)
+nikkei <- as.xts(nikkei)
+hsi <- scraping_ind("^hsi")
+shanghai <- scraping_ind("000001.ss")
+asx200 <- read.xlsx("ASX200.xlsx", colNames = T, rowNames = T)
+asx200 <- as.xts(asx200)
+
+scraping_cur <- function(x){
+  a <- jsonlite::fromJSON(paste0(x,".json"))
+  a <- lapply(a,unlist)
+  a <- do.call(rbind, a[-1])
+  a <- as.xts(a)
+  return(a)
+}
+EURUSD <- scraping_cur("EURUSD")
+USDJPY <- scraping_cur("USDJPY")
+USDAUD <- scraping_cur("USDAUD")
+USDCNY <- scraping_cur("USDCNY")
+GBPUSD <- scraping_cur("GBPUSD")
+
+Gold <- read.xlsx("Gold.xlsx", colNames = T, rowNames = T)
+Gold <- as.xts(Gold)
+Silver <- read.xlsx("Silver.xlsx", colNames = T, rowNames = T)
+Silver <- as.xts(Silver)
+Palladium <- read.xlsx("Palladium.xlsx", colNames = T, rowNames = T)
+Palladium <- as.xts(Palladium)
+Brent <- read.xlsx("Brent.xlsx", colNames = T, rowNames = T)
+Brent <- as.xts(Brent)
+```
+
+#Subset data
+
+Subset the data to have same start and end point
+
+``` {r include=TRUE, echo=FALSE}
+sp500 <- sp500["2001-08-29/2019-05-15"]
+hsi <- hsi["2001-08-29/2019-05-15"]
+eu50 <- eu50["2001-08-29/2019-05-15"]
+eu600 <- eu600["2001-08-29/2019-05-15"]
+dax <- dax["2001-08-29/2019-05-15"]
+cac <- cac["2001-08-29/2019-05-15"]
+asx <- asx200["2001-08-29/2019-05-15"]
+shanghai <- shanghai["2001-08-29/2019-05-15"]
+EURUSD <- EURUSD["2001-08-29/2019-05-15"]
+GBPUSD <- GBPUSD["2001-08-29/2019-05-15"]
+USDJPY <- USDJPY["2001-08-29/2019-05-15"]
+Gold <- Gold["2001-08-29/2019-05-15"]
+Brent <- Brent["2001-08-29/2019-05-15"]
+```
+
+#Merge data series, interpolate for missing data and calculate Log differencing
+
+Merge the data into a single dataframe and rename the columns.
+Assign a value of NA where prices are 0 in order to use the *na_interpolation* function to replace missing values in between dates.
+Then apply Log differencing to get the Log Returns of each data series.
+
+```{r include=TRUE, echo=FALSE}
+stock_df <- merge.xts(sp500[,5],hsi[,5],eu50[,5],eu600[,5],dax[,5],cac[,1],asx[,1],shanghai[,5],EURUSD[,4],GBPUSD[,4],USDJPY[,4],Gold[,1],Brent[,1], all=T)
+colnames(stock_df) <- c("sp500","hsi","eu50","eu600","dax","cac","asx","shanghai","EURUSD","GBPUSD","USDJPY","Gold","Brent")
+stock_df[stock_df == 0] <- NA
+stock_df <- na_interpolation(stock_df,option="linear", maxgap=Inf)
+stock_log <- diff.xts(stock_df, lag = 1, log = T)
+write.csv(stock_log[-1], file="LogReturn.csv")
+```
+
+#Correlation matrix
+
+Calculate the correlation coefficients between the SP500 and the other features on 10 different time lags.
+
+```{r include=TRUE, echo=FALSE}
+ccf_function <- function(y,x,k){
+  x_cor <- stock_log[,x]
+  attr(x_cor, "frequency") <- 1
+  y_cor <- stock_log[,y]
+  attr(y_cor, "frequency") <- 1
+  return (ccf(drop(x_cor),drop(y_cor),lag.max=k,na.action=na.omit,plot=F))
+}
+cor_matrix <- matrix(rbind(ccf_function("sp500","sp500",5)$lag,
+                               ccf_function("sp500","sp500",5)$acf,
+                           ccf_function("sp500","hsi",5)$acf,
+                           ccf_function("sp500","eu50",5)$acf,
+                           ccf_function("sp500","eu600",5)$acf,
+                           ccf_function("sp500","dax",5)$acf,
+                           ccf_function("sp500","cac",5)$acf,
+                           ccf_function("sp500","asx",5)$acf,
+                           ccf_function("sp500","shanghai",5)$acf,
+                           ccf_function("sp500","EURUSD",5)$acf,
+                           ccf_function("sp500","GBPUSD",5)$acf,
+                           ccf_function("sp500","USDJPY",5)$acf,
+                           ccf_function("sp500","Gold",5)$acf,
+                           ccf_function("sp500","Brent",5)$acf), nrow=14, ncol=11)
+colnames(cor_matrix) <- paste0("Lag = ",ccf_function("sp500","sp500",5)$lag)
+rownames(cor_matrix) <- c("Lag",colnames(stock_log))
+```
+
+#Correlation matrix
+
+Plot the values of the correlation matrix onto a graph.
+
+```{r echo=FALSE, include=TRUE}
+plot(cor_matrix[1,],cor_matrix[2,],type="l", ylab=expression("Cross-correlation with "*"SP500"["t=0"]),
+     xlab = "Lag", main = expression("SP500"["t=0"]*" correlation with Lag {-5:5}"),col= rainbow(13)[1], ylim=c(0,1))
+lines(cor_matrix[1,],cor_matrix[3,], col=rainbow(13)[2])
+lines(cor_matrix[1,],cor_matrix[4,], col=rainbow(13)[3])
+lines(cor_matrix[1,],cor_matrix[5,], col=rainbow(13)[4])
+lines(cor_matrix[1,],cor_matrix[6,], col=rainbow(13)[5])
+lines(cor_matrix[1,],cor_matrix[7,], col=rainbow(13)[6])
+lines(cor_matrix[1,],cor_matrix[8,], col=rainbow(13)[7])
+lines(cor_matrix[1,],cor_matrix[9,], col=rainbow(13)[8])
+lines(cor_matrix[1,],cor_matrix[10,], col=rainbow(13)[9])
+lines(cor_matrix[1,],cor_matrix[11,], col=rainbow(13)[10])
+lines(cor_matrix[1,],cor_matrix[12,], col=rainbow(13)[11])
+lines(cor_matrix[1,],cor_matrix[13,], col=rainbow(13)[12])
+lines(cor_matrix[1,],cor_matrix[14,], col=rainbow(13)[13])
+legend("topright",legend = rownames(cor_matrix)[-1],
+       col=rainbow(13), lty = 1, cex=0.7, 
+       ncol=2 , bty="n", y.intersp = 0.6, x.intersp = 0.05)
+```
+
+#Correlogram
+
+Color-code the correlation values from the correlation matrix using the thresholds [-0.1, 0, 0.15, 0.3, 0.5, 1]
+
+```{r echo=FALSE, include=TRUE}
+gplots::heatmap.2(cor_matrix[-1,],Rowv = NA, Colv = NA, col= gplots::colorpanel(5,low="red",mid="yellow",high="green"),
+                  dendrogram = "none", breaks=c(-0.1,0,0.15,0.3,0.5,1),
+                  trace="none", lhei = c(0,8),lwid=c(0,4), main = "Correlogram of the SP500",
+                  offsetRow = 0.5, offsetCol = 0.5)
+```
+
+
+# Modeling
+
+The following code will calculate the predictions made by the simple machine learning algorithms.
+The *tuned()* function takes as arguments the name of the algorithm a list with the specified hyperparameters.
+
+```{r ecco=FALSE, include=TRUE}
+library(caret)
+library(e1071)
+library(doParallel)
+library(party)
+library(reshape2)
+library(ROCR)
+set.seed(1001)
+stocks <- as.xts(read.zoo(file="LogReturns.csv", sep=",", header=TRUE, format="%Y-%m-%d", drop=FALSE))
+stocks$spclass <- ifelse(stocks$sp500>0,1,0)
+
+window.length <- 500
+horizon <- 10
+trControl <- trainControl(method = "timeslice", initialWindow =
+                          window.length, horizon = horizon,
+                          skip= horizon-1, fixedWindow = T,
+                          savePredictions = "final",
+                          p = 0.9, selectionFunction = "best",
+                          allowParallel = T)
+
+stocks <- as.data.frame(stocks)
+tuned <- function(method,grid){
+  start.time <- Sys.time()
+  stocks <- as.data.frame(stocks)
+  tuned_RMSE <- train(x=stocks[,-c(1,11)],
+                      y=as.numeric(stocks$sp500),
+                      method = method,
+                      tuneGrid = grid,
+                      trControl = trControl, preProcess=c("center","scale"),
+                      metric='RMSE')
+  regr <- tuned_RMSE$results
+  tuned_RMSE$pred <- tuned_RMSE$pred[order(tuned_RMSE$pred$rowIndex),]
+  HighRMSE <- RMSE(tuned_RMSE$pred[Hi.quart.index.obs,"pred"], stocks[Hi.quart.index.obs,"sp500"], na.rm=T)
+  LowRMSE <- RMSE(tuned_RMSE$pred[Lo.quart.index.obs,"pred"], stocks[Lo.quart.index.obs,"sp500"], na.rm=T)
+  assign(paste0("predicted",method), tuned_RMSE$pred, envir = .GlobalEnv)
+  print(regr)
+  print(tuned_RMSE$bestTune)
+  tuned_accuracy <- train(x=stocks[,-c(1,11)],
+                        y=as.factor(stocks$spclass),
+                        method = method,
+                        tuneGrid = tuned_RMSE$bestTune,
+                        trControl = trControl, preProcess=c("center","scale"),
+                        metric='Accuracy')
+  acc <- tuned_accuracy$results[-c(1:length(tuned_accuracy$bestTune))]
+  assign(paste0(method),as.data.frame(rbind(tuned_accuracy$method,t(regr),LowRMSE, HighRMSE, t(acc))), envir = .GlobalEnv)
+  trControl$classProbs=TRUE
+  class <- train(x=stocks[,-c(1,11)],
+                 y=ifelse(stocks$spclass==1,"Yes","No"),
+                 method = method,
+                 tuneGrid = tuned_RMSE$bestTune,
+                 trControl = trControl, preProcess=c("center","scale"),
+                 metric='Accuracy')
+  assign(paste0("ClassProb",method),class$pred$Yes, envir = .GlobalEnv)
+}
+
+tuned("svmLinear",expand.grid(C=0.01))
+tuned("cforest",expand.grid(mtry=6))
+tuned("rpart2", expand.grid(maxdepth=5))
+
+tuned("xgbLinear", expand.grid(nrounds=25, lambda=0.05, alpha=0.05,
+                               eta=0.005))
+
+tuned("svmRadialSigma", expand.grid(C=10, sigma=0.01))
+tuned("svmPoly",expand.grid(degree=2,C=0.05, scale=0.1))
+
+tuned("parRF",expand.grid(mtry=1))
+tuned("ranger",expand.grid(mtry=6, splitrule="extratrees", min.node.size=8))
+tuned("rf", expand.grid(mtry=3))
+tuned("RRF", expand.grid(mtry=3, coefReg=1.0, coefImp=0))
+tuned("RRFglobal",expand.grid(mtry=3, coefReg=1))
+tuned("rpart", expand.grid(cp=0.05))
+tuned("rpart1SE",NULL)
+tuned("xgbDART", expand.grid(nrounds=1, max_depth=1, eta=0.3,
+                               gamma=1, subsample=0.5,
+                               colsample_bytree=0.5, rate_drop=0.1,
+                               skip_drop=1, min_child_weight=2))
+tuned("xgbTree", expand.grid(nrounds=c(25,30), max_depth=c(1,2), eta=c(0.1,0.2),
+      gamma=c(0.3,0.5),colsample_bytree=c(0.1,0.5), min_child_weight=c(1,2), subsample=c(0.2,0.5)))
+```
+
+#Predicted vs Observed Log Return
+
+This plot the LogReturns of the SP500 with the predicted SP500 returns from the ML model.
+
+```{r echo=FALSE, include=TRUE}
+PredObs <- function(x){
+  PredObs <- cbind(xts(x["pred"], order.by = index(stocks[(window.length+1):(nrow(stocks)-(nrow(stocks)-window.length)%%horizon),])), stocks[(window.length+1):(nrow(stocks)-(nrow(stocks)-window.length)%%horizon),"sp500"])
+  plot(PredObs[,2], col=alpha("black",0.85), lwd=2, main=paste0(substring(substitute(x),10)," Observed vs Predicted Return"))
+  lines(PredObs[,1], col=alpha("red",0.75))
+}
+
+PredObs(predictedsvmLinear)
+PredObs(predictedsvmRadialSigma)         
+PredObs(predictedsvmPoly)
+PredObs(predictedcforest)
+PredObs(predictedparRF)
+PredObs(predictedranger)
+PredObs(predictedrf)
+PredObs(predictedRRF)
+PredObs(predictedRRFglobal)
+PredObs(predictedrpart)
+PredObs(predictedrpart1SE)
+PredObs(predictedrpart2)
+PredObs(predictedxgbLinear)
+```
+
+
+#Summary table for RMSE, Accuracy and R-squared
+
+```{r echo=FALSE, include=TRUE}
+pick <- function(x){
+  return (as.data.frame(x[c("RMSE","Rsquared","LowRMSE","HighRMSE","Accuracy","Kappa"),], make.name=T))
+}
+
+SummaryTable <- data.frame(pick(svmLinear)[1,],
+    pick(svmRadialSigma)[1,],
+    pick(svmPoly)[1,],
+    pick(cforest)[1,],
+    pick(parRF)[1,],
+    pick(ranger)[1,],
+    pick(rf)[1,],
+    pick(RRF)[1,],
+    pick(RRFglobal)[1,],
+    pick(rpart)[1,],
+    pick(rpart1SE)[1,],
+    pick(rpart2)[1,],
+    pick(xgbLinear)[1,])
+```
+
+## RNN models
+
+The modus operandi for the RNN models is as follows:
+- create timeslices of training and testing windows in order to cross-validate using a sliding windows approach (train on 500 observations, predict the next 10, then jump 9 steps.)
+-scale the test data of each window to match the dimensions of the training data (mean of 0 and standard deviation of 1)
+-use 3 different arrays to store the following data:
+for classification:
+    - prediction of class for each observation
+    - average accuracy for each test fold
+    - class probability of the prediction equaling 1 with a threshold of 0.5
+for regression:
+    - predicition of the Log return
+    - Root Mean Squared Error of the predicted and observed LogReturn averaged for each test fold
+    
+- accuracy/RMSE of the whole model is calculated by averaging the accuracy/RMSE of all test folds using the specific array with the averages of each single test fold
+
+
+
+Early stopping measures stalling improvements and restores to the best weights before the last (failed) 25 epochs.
+
+```{r echo=FALSE, include=TRUE}
+library(keras)
+library(tensorflow)
+
+X <-as.xts(subset(stocks, select= -c(sp500,spclass)))
+Y_regr <- as.xts(subset(stocks, select= sp500))
+Y_class <- as.xts(subset(stocks, select= spclass))
+
+window.length <- 500
+horizon <- 10
+n_batch <- 10
+n_epoch <- window.length/n_batch
+n_neurons <- 9
+
+timeslices <- createTimeSlices(1:nrow(stocks),initialWindow = window.length, skip = horizon-1, horizon = horizon, fixedWindow = T)
+trainslices <- timeslices[[1]]
+testslices <- timeslices[[2]]
+
+es <- callback_early_stopping(monitor = "loss", 
+                              verbose = 1, patience = 25, 
+                              restore_best_weights = T)
+```
+
+#LSTM
+
+
+```{r echo=FALSE, include=TRUE}
+#Classification
+
+model <- keras_model_sequential()
+model %>% layer_lstm(units = n_neurons, batch_input_shape = c(n_batch, 1, 9),
+                     activation = "tanh",
+                     return_sequences = F, stateful= T, trainable=T)
+model %>% layer_dense(units = 1, activation = "sigmoid")
+
+model %>% keras:::compile.keras.engine.training.Model(
+  optimizer = "nadam",
+  loss = "binary_crossentropy",
+  metrics = "binary_accuracy"
+)
+
+outputClass_LSTM_tanh <- rep(0, nrow(stocks))
+outputAccuracy_LSTM_tanh <- rep(0, length(testslices))
+outputProba_LSTM_tanh <- rep(0, nrow(stocks))
+
+for (i in 1:length(trainslices)){
+  X_train <- scale(X[trainslices[[i]]], center = T, scale = T)
+  preproc_X <- preProcess(as.matrix(X_train))
+  X_train <- array(X_train, dim=c(length(trainslices[[1]]),1,ncol(X)))
+  X_test <- array(predict(preproc_X, X[testslices[[i]]]), dim=c(length(testslices[[1]]),1,ncol(X)))
+  Y_train <- array(Y_class[trainslices[[i]]], dim = c(length(trainslices[[1]]),1))
+  Y_test <- array(Y_class[testslices[[i]]], dim = c(length(testslices[[1]]),1))
+  model %>% keras:::fit.keras.engine.training.Model(
+    X_train, Y_train, epochs = n_epoch, batch_size = n_batch, 
+    shuffle = F, verbose = 0, callbacks = es
+  )
+  proba <- model %>% keras:::predict.keras.engine.training.Model(
+    X_test, batch_size = n_batch, verbose = 0
+  )
+  pred <- model %>% keras:::predict_classes(
+    X_test, batch_size = n_batch,  verbose = 0
+  )
+  acc <- model %>% keras:::evaluate.keras.engine.training.Model(
+    X_test, Y_test, batch_size = n_batch, verbose=1
+  )
+  outputProba_LSTM_tanh[testslices[[i]]] <- proba
+  outputClass_LSTM_tanh[testslices[[i]]] <- pred
+  outputAccuracy_LSTM_tanh[i] <- acc[[2]]
+}
+outputClass_LSTM_tanh <- outputClass_LSTM_tanh[c((window.length+1):length(outputClass_LSTM_tanh))]
+outputProba_LSTM_tanh <- outputProba_LSTM_tanh[c((window.length+1):length(outputProba_LSTM_tanh))]
+
+#Regression
+
+model <- keras_model_sequential()
+model %>% layer_lstm(units = n_neurons, batch_input_shape = c(n_batch, 1, 9),
+                     activation = "tanh",
+                     return_sequences = F, stateful= T, trainable=T)
+model %>% layer_dense(units = 1, activation = "linear")
+
+model %>% keras:::compile.keras.engine.training.Model(
+  optimizer = "nadam",
+  loss = "mean_squared_error"
+)
+outputPredicted_LSTM_tanh_v <- rep(0, nrow(stocks))
+outputRMSE_LSTM_tanh_v <- rep(0, length(testslices))
+
+for (i in 1:length(trainslices)){
+  X_train <- scale(X[trainslices[[i]]], center = T, scale = T)
+  preproc_X <- preProcess(as.matrix(X_train))
+  X_train <- array(X_train, dim=c(length(trainslices[[1]]),1,ncol(X)))
+  X_test <- array(predict(preproc_X, X[testslices[[i]]]), dim=c(length(testslices[[1]]),1,ncol(X)))
+  Y_train <- array(Y_regr[trainslices[[i]]], dim = c(length(trainslices[[1]]),1))
+  Y_test <- array(Y_regr[testslices[[i]]], dim = c(length(testslices[[1]]),1))
+  model %>% keras:::fit.keras.engine.training.Model(
+    X_train, Y_train, epochs = n_epoch, batch_size = n_batch, shuffle = F,
+    verbose = 0, callbacks = es, validation_split = 0.1
+  )
+  pred <- model %>% keras:::predict.keras.engine.training.Model(
+    X_test, batch_size = n_batch,  verbose = 1
+  )
+  outputPredicted_LSTM_tanh_v[testslices[[i]]] <- pred
+  outputRMSE_LSTM_tanh_v[i] <- RMSE(pred, Y_test)
+}
+outputPredicted_LSTM_tanh_v <- outputPredicted_LSTM_tanh_v[c((window.length+1):length(outputPredicted_LSTM_tanh_v))]
+mean(outputRMSE_LSTM_tanh_v)
+```
+
+#GRU
+
+```{r echo=FALSE, include=TRUE}
+#Classification
+
+model <- keras_model_sequential()
+model %>% layer_GRU(units = n_neurons, batch_input_shape = c(n_batch, 1, 9),
+                    return_sequences = F, activation = "relu",
+                    stateful = T, reset_after = T, trainable = T)
+model %>% layer_dense(units = 1, activation = "sigmoid")
+
+model %>% keras:::compile.keras.engine.training.Model(
+  optimizer = "nadam",
+  loss = "binary_crossentropy",
+  metrics = "binary_accuracy"
+)
+
+outputClass_GRU_relu <- rep(0, nrow(stocks))
+outputAccuracy_GRU_relu <- rep(0, length(testslices))
+outputProba_GRU_relu <- rep(0, nrow(stocks))
+
+for (i in 1:length(trainslices)){
+  X_train <- scale(X[trainslices[[i]]], center = T, scale = T)
+  preproc_X <- preProcess(as.matrix(X_train))
+  X_train <- array(X_train, dim=c(length(trainslices[[1]]),1,ncol(X)))
+  X_test <- array(predict(preproc_X, X[testslices[[i]]]), dim=c(length(testslices[[1]]),1,ncol(X)))
+  Y_train <- array(Y_class[trainslices[[i]]], dim = c(length(trainslices[[1]]),1))
+  Y_test <- array(Y_class[testslices[[i]]], dim = c(length(testslices[[1]]),1))
+  model %>% keras:::fit.keras.engine.training.Model(
+    X_train, Y_train, epochs = n_epoch, batch_size = n_batch, 
+    shuffle = F, verbose = 0, callbacks = es
+  )
+  proba <- model %>% keras:::predict.keras.engine.training.Model(
+    X_test, batch_size = n_batch, verbose = 0
+  )
+  pred <- model %>% keras:::predict_classes(
+    X_test, batch_size = n_batch,  verbose = 0
+  )
+  acc <- model %>% keras:::evaluate.keras.engine.training.Model(
+    X_test, Y_test, batch_size = n_batch, verbose=1
+  )
+  outputProba_GRU_relu[testslices[[i]]] <- proba
+  outputClass_GRU_relu[testslices[[i]]] <- pred
+  outputAccuracy_GRU_relu[i] <- acc[[2]]
+}
+outputClass_GRU_relu <- outputClass_GRU_relu[c((window.length+1):length(outputClass_GRU_relu))]
+outputProba_GRU_relu <- outputProba_GRU_relu[c((window.length+1):length(outputProba_GRU_relu))]
+
+#Regression
+model <- keras_model_sequential()
+model %>% layer_gru(units = n_neurons,batch_input_shape = c(n_batch, 1, 9),
+                    #input_shape = c(1,9),
+                    return_sequences = F, activation = "relu",
+                    stateful = T, reset_after = T, trainable = T)
+model %>% layer_dense(units = 1, activation = "linear")
+
+model %>% keras:::compile.keras.engine.training.Model(
+  optimizer = "nadam",
+  loss = "mean_squared_error"
+)
+outputPredicted_GRU_relu_v <- rep(0, nrow(stocks))
+outputRMSE_GRU_relu_v <- rep(0, length(testslices))
+
+for (i in 1:length(trainslices)){
+  X_train <- scale(X[trainslices[[i]]], center = T, scale = T)
+  preproc_X <- preProcess(as.matrix(X_train))
+  X_train <- array(X_train, dim=c(length(trainslices[[1]]),1,ncol(X)))
+  X_test <- array(predict(preproc_X, X[testslices[[i]]]), dim=c(length(testslices[[1]]),1,ncol(X)))
+  Y_train <- array(Y_regr[trainslices[[i]]], dim = c(length(trainslices[[1]]),1))
+  Y_test <- array(Y_regr[testslices[[i]]], dim = c(length(testslices[[1]]),1))
+  model %>% keras:::fit.keras.engine.training.Model(
+    X_train, Y_train, epochs = n_epoch, batch_size = n_batch, shuffle = F, verbose = 0, 
+    validation_split = 0.1, callbacks = es
+  )
+  pred <- model %>% keras:::predict.keras.engine.training.Model(
+    X_test, batch_size = n_batch,  verbose = 1
+  )
+  outputPredicted_GRU_relu_v[testslices[[i]]] <- pred
+  outputRMSE_GRU_relu_v[i] <- RMSE(pred, Y_test)
+}
+outputPredicted_GRU_relu_v <- outputPredicted_GRU_relu_v[c((window.length+1):length(outputPredicted_GRU_relu_v))]
+mean(outputRMSE_GRU_relu_v)
+```
+
+# ROC and AUC values
+
+```{r echo=FALSE, include=TRUE}
+roc <- function(x,method){
+  plot(performance(prediction(x,stocks$spclass[c(501:4900)]),"tpr","fpr"), main=paste0("ROC Curves ",method))
+  abline(0,1,lty=2,col="red")
+}
+roc(ClassProbsvmLinear[,1],"")
+plot(performance(prediction(ClassProbcforest[,1],stocks$spclass[c(501:4900)]),"tpr","fpr"),col=rainbow(7)[7], add = T)
+plot(performance(prediction(ClassProbrpart2[,1],stocks$spclass[c(501:4900)]),"tpr","fpr"),col=rainbow(7)[3], add = T)
+plot(performance(prediction(ClassProbxgbLinear,stocks$spclass[c(501:4900)]),"tpr","fpr"),col=rainbow(7)[4], add = T)
+plot(performance(prediction(outputProba_GRU_relu,stocks$spclass[c(501:4900)]),"tpr","fpr"),col=rainbow(7)[5], add = T)
+plot(performance(prediction(outputProba_LSTM_tanh,stocks$spclass[c(501:4900)]),"tpr","fpr"),col=rainbow(7)[6], add = T)
+legend(0.7, 0.7, bty="n", legend= c(paste0("SVM    ",round(performance(prediction(ClassProbsvmLinear[,1],stocks$spclass[c(501:4900)]),"auc")@y.values[[1]],digits=5)),
+                                    paste0("Random Forest    ",round(performance(prediction(ClassProbcforest[,1],stocks$spclass[c(501:4900)]),"auc")@y.values[[1]], digits = 5)),
+                                    paste0("XGradient Boosting    ", round(performance(prediction(ClassProbxgbLinear,stocks$spclass[c(501:4900)]),"auc")@y.values[[1]], digits = 5)),
+                                    paste0("Decision Tree    ", round(performance(prediction(ClassProbrpart2[,1],stocks$spclass[c(501:4900)]),"auc")@y.values[[1]], digits = 5)),
+                                    paste0("GRU    ", round(performance(prediction(outputProba_GRU_relu,stocks$spclass[c(501:4900)]),"auc")@y.values[[1]], digits = 5)),
+                                    paste0("LSTM    ", round(performance(prediction(outputProba_LSTM_tanh,stocks$spclass[c(501:4900)]),"auc")@y.values[[1]], digits = 5))),
+       pch = 15, cex = 0.6, y.intersp = 0.5, col=c("black",rainbow(7)[c(7,4,3,5,6)]))
+text(0.825,0.75,labels = "AUC values", pos=1, font=2, cex=0.6)
+```
+
+#Plot of predicted vs observed LogReturns on timeline
+
+```{r echo=FALSE, include=TRUE}
+plotit <- function(expression,activation){
+  abc <- cbind(xts(expression, order.by = index(stocks[(window.length+1):nrow(stocks),])), stocks[(window.length+1):nrow(stocks),"sp500"])
+  plot(abc, col=c(alpha("red",0.65),alpha("black",0.85)), lwd=c(1,2), main=activation, multi.panel = F, type="l", yaxis.same = T, )
+  #lines(abc[,1], col=alpha("red",0.65))
+  text(x=as.POSIXct("2014-01-01"),y=-0.05, labels="RMSE = [insert corresponding value here}", cex=0.8)
+  text(x=as.POSIXct("2014-01-01"),y=-0.08, labels="Accuracy = [insert corresponding value here]", cex=0.8)
+}
+#insert each model name manually with correspoding RMSE and Accuracy values
+plotit(df.predicted$GRU,"[Name of model e.g. GRU]")
+```
+
+#Plot of Class imbalance
+
+```{r echo=FALSE, include=TRUE}
+par(mfrow=c(2,3))
+par(mar=c(2,2,3,2))
+barplot(table(ifelse(ClassProbsvmLinear[,1]>0.5,1,0)), main="Class Imbalance SVM", col="black", ylim=c(0,3000))
+abline(h=2200, col="blue", lty=2)
+barplot(table(ifelse(ClassProbcforest[,1]>0.5,1,0)), main="Class Imbalance RF", col=rainbow(7)[7], ylim=c(0,3000))
+abline(h=2200, col="blue", lty=2)
+barplot(table(ifelse(ClassProbrpart2[,1]>0.5,1,0)), main="Class Imbalance DT",col=rainbow(7)[3], ylim=c(0,3000))
+abline(h=2200, col="blue", lty=2)
+barplot(table(ifelse(ClassProbxgbLinear>0.5,1,0)), main="Class Imbalance XGB", col=rainbow(7)[4], ylim=c(0,3000))
+abline(h=2200, col="blue", lty=2)
+barplot(table(outputClass_GRU_relu), main="Class Imbalance GRU", col=rainbow(7)[5], ylim=c(0,3000))
+abline(h=2200, col="blue", lty=2)
+barplot(table(outputClass_LSTM_tanh), main="Class Imbalance LSTM", col=rainbow(7)[6], ylim=c(0,3000))
+abline(h=2200, col="blue", lty=2)
+dev.off()
+
+barplot(table(stocks[c(501:4900),"spclass"]), main="Class Imbalance SP500", col="red", ylim=c(0,3000))
+abline(h=2200, col="blue", lty=2)
+
+class_imbalance <- matrix(data = c(table(stocks$spclass[501:4900])/4400,                              table(ifelse(df.predicted$SVM>0,1,0))/4400,
+                              table(ifelse(df.predicted$RF>0,1,0))/4400,
+                              table(ifelse(df.predicted$DT>0,1,0))/4400,
+                              table(ifelse(df.predicted$XGB>0,1,0))/4400,
+                              table(ifelse(df.predicted$GRU>0,1,0))/4400,
+                            table(ifelse(df.predicted$LSTM>0,1,0))/4400),
+                          byrow = T, ncol=2, nrow=7,
+                          dimnames= list(c("SP500","SVM","RF","DT","XGB","GRU","LSTM"), c(0,1)))
+
+```
+
+# Confusion Matrix
+
+```{r echo=FALSE, include=TRUE}
+tocsv <- data.frame(rbind(cbind(t(confusionMatrix(data = as.factor(ifelse(ClassProbsvmLinear[,1]>0.5,1,0)),
+                                                  reference = as.factor(stocks$spclass[c(501:4900)]),
+                                                  positive = "1")$overall),
+                                t(confusionMatrix(data = as.factor(ifelse(ClassProbsvmLinear[,1]>0.5,1,0)),
+                                                  reference = as.factor(stocks$spclass[c(501:4900)]),
+                                                  positive = "1")$byClass)),
+                          cbind(t(confusionMatrix(data = as.factor(ifelse(ClassProbrpart2[,1]>0.5,1,0)),
+                                                  reference = as.factor(stocks$spclass[c(501:4900)]),
+                                                  positive = "1")$overall),
+                                t(confusionMatrix(data = as.factor(ifelse(ClassProbrpart2[,1]>0.5,1,0)),
+                                                  reference = as.factor(stocks$spclass[c(501:4900)]),
+                                                  positive = "1")$byClass)),
+                          cbind(t(confusionMatrix(data = as.factor(ifelse(ClassProbrf[,1]>0.5,1,0)),
+                                                  reference = as.factor(stocks$spclass[c(501:4900)]),
+                                                  positive = "1")$overall),
+                                t(confusionMatrix(data = as.factor(ifelse(ClassProbrf[,1]>0.5,1,0)),
+                                                  reference = as.factor(stocks$spclass[c(501:4900)]),
+                                                  positive = "1")$byClass)),
+                          cbind(t(confusionMatrix(data = as.factor(ifelse(ClassProbxgbLinear>0.5,1,0)),
+                                                  reference = as.factor(stocks$spclass[c(501:4900)]),
+                                                  positive = "1")$overall),
+                                t(confusionMatrix(data = as.factor(ifelse(ClassProbxgbLinear>0.5,1,0)),
+                                                      reference = as.factor(stocks$spclass[c(501:4900)]),
+                                                      positive = "1")$byClass)),
+                          cbind(t(confusionMatrix(data = as.factor(outputClass_GRU_relu),
+                                                  reference = as.factor(stocks$spclass[c(501:4900)]),
+                                                  positive = "1")$overall),
+                                t(confusionMatrix(data = as.factor(outputClass_GRU_relu),
+                                                  reference = as.factor(stocks$spclass[c(501:4900)]),
+                                                  positive = "1")$byClass)),
+                          cbind(t(confusionMatrix(data = as.factor(outputClass_LSTM_tanh),
+                                                  reference = as.factor(stocks$spclass[c(501:4900)]),
+                                                  positive = "1")$overall),
+                                t(confusionMatrix(data = as.factor(outputClass_LSTM_tanh),
+                                                  reference = as.factor(stocks$spclass[c(501:4900)]),
+                                                  positive = "1")$byClass))))
+
+rownames(tocsv) <- c('SVM','DT','RF','XGB','GRU','LSTM')
+write.csv(tocsv, file='ConfusionMatrix.csv')
+```
+
+#Scatterplot of predicted vs observed values
+
+```{r echo=FALSE, include=TRUE}
+scatterplot <- function(values){
+  ggplot(df.predicted, aes(x = sp500, y = values))+
+    geom_point(shape=1)+
+    geom_abline(slope = 1, col="red")+
+    theme_bw()+
+    annotate(geom="text",label=deparse(bquote(R^2==.(cor(df.predicted$sp500,values)^2))), x=0.05, y=-0.015, parse =T)+
+    labs(title="Scatterplot Predicted-Observed", x="SP500", y=gsub("^.*\\$","",deparse(substitute(values))))+
+    theme(plot.title = element_text(hjust = 0.5))
+}
+
+scatterplot(df.predicted$SVM)
+scatterplot(df.predicted$RF)
+scatterplot(df.predicted$DT)
+scatterplot(df.predicted$XGB)
+scatterplot(df.predicted$LSTM)
+scatterplot(df.predicted$GRU)
+```
+
+#Density plot
+
+```{r echo=FALSE, include=TRUE}
+ggplot(melt(df.predicted, variable.name ="model"), aes(x = value, color = model))+
+  geom_density(aes(linetype=model), size=1)+
+  xlim(-0.025, 0.025)+
+  scale_linetype_manual(values=c(4,1,1,1,1,1,1), labels=c("sp500","SVM","RF","DT","XGB","GRU","LSTM"))+
+  theme_bw()+
+  labs(title="Density plot comparison", x="Log Return", y="Density")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+#Extrapolated price chart from the start with predicted returns
+
+Plot to visualize which prediction performance of each model lies the nearest to the original history of the SP500 price
+
+```{r echo=FALSE, include=TRUE}
+plot(stock_df["2003-07-31/2019-05-15",1], ylim=c(1400,25000), lty=1, lwd=1,col="black", main="Price trend with predicted returns", log='y')
+lines(xts(1434.33*exp(cumsum(df.predicted$SVM)),index(stock_df[501:4900])), col="red", lty=3, lwd=2)
+lines(xts(1434.33*exp(cumsum(df.predicted$RF)),index(stock_df[501:4900])), col=rainbow(7)[7], lty=3, lwd=2)
+lines(xts(1434.33*exp(cumsum(df.predicted$DT)),index(stock_df[501:4900])), col=rainbow(7)[3], lty=3, lwd=2)
+lines(xts(1434.33*exp(cumsum(df.predicted$XGB)),index(stock_df[501:4900])), col=rainbow(7)[4], lty=3, lwd=2)
+lines(xts(1434.33*exp(cumsum(df.predicted$GRU)),index(stock_df[501:4900])), col=rainbow(7)[5], lty=3, lwd=2)
+lines(xts(1434.33*exp(cumsum(df.predicted$LSTM)),index(stock_df[501:4900])), col=rainbow(7)[6], lty=3, lwd=2)
+addLegend("topleft",
+          legend.names = c("SP500","SVM","RF","DT","XGB","GRU","LSTM"),
+          lty=c(1,3,3,3,3,3,3), lwd=2,
+          col=c("black","red",rainbow(7)[7],rainbow(7)[3],rainbow(7)[4],rainbow(7)[5],rainbow(7)[6]))
+```
