@@ -21,27 +21,33 @@ library(xts)
 library(imputeTS)
 library(jsonlite)
 
-setAPIKey("0L5Z4NE0KRJNL31A")
-scraping_ind <- function(x){
-  y <- fetchSeries(function_nm = "TIME_SERIES_DAILY_ADJUSTED", symbol=x, 
-                   outputsize="full", datatype="json")
-  y <- y$xts_object
-  return (y)
-}
+# setAPIKey("0L5Z4NE0KRJNL31A")
+# scraping_ind <- function(x){
+#   y <- fetchSeries(function_nm = "TIME_SERIES_DAILY_ADJUSTED", symbol=x, 
+#                    outputsize="full", datatype="json")
+#   y <- y$xts_object
+#   return (y)
+# }
 
-sp500 <- scraping_ind("^sp500tr")
-dax <- scraping_ind("^gdaxi")
-eu50 <- scraping_ind("^stoxx50e")
+sp500 <- read.zoo("sp500.csv", sep=",", header=TRUE, format="%Y-%m-%d", tz="")
+sp500 <- as.xts(sp500)
+dax <- read.zoo("dax.csv", sep=",", header=TRUE, format="%Y-%m-%d", tz="")
+dax <- as.xts(dax)
+hsi <- read.zoo("hsi.csv", sep=",", header=TRUE, format="%Y-%m-%d", tz="")
+hsi <- as.xts(hsi)
+shanghai <- read.zoo("shanghai.csv", sep=",", header=TRUE, format="%Y-%m-%d", tz="")
+shanghai <- as.xts(shanghai)
+eu600 <- read.zoo("eu600.csv", sep=",", header=TRUE, format="%Y-%m-%d", tz="")
+eu600 <- as.xts(eu600)
+eu50 <- read.zoo("eu50.csv", sep=",", header=TRUE, format="%Y-%m-%d", tz="")
+eu50 <- as.xts(eu50)
 ftse <- read.xlsx("FTSE100.xlsx", colNames = T, rowNames = T)
 ftse <- as.xts(ftse)
 # cac <- scraping("^FCHI")
 cac <- read.xlsx("CAC40.xlsx", colNames = T, rowNames = T)
 cac <- as.xts(cac)
-eu600 <- scraping_ind("^stoxx")
 nikkei <- read.xlsx("Nikkei225.xlsx", colNames = T, rowNames = T)
 nikkei <- as.xts(nikkei)
-hsi <- scraping_ind("^hsi")
-shanghai <- scraping_ind("000001.ss")
 asx200 <- read.xlsx("ASX200.xlsx", colNames = T, rowNames = T)
 asx200 <- as.xts(asx200)
 
@@ -101,6 +107,7 @@ stock_df[stock_df == 0] <- NA
 stock_df <- na_interpolation(stock_df,option="linear", maxgap=Inf)
 stock_log <- diff.xts(stock_df, lag = 1, log = T)
 write.csv(stock_log[-1], file="LogReturn.csv")
+stock_log <- stock_log[-1]
 ```
 
 #Correlation matrix
@@ -184,6 +191,10 @@ library(ROCR)
 set.seed(1001)
 stocks <- as.xts(read.zoo(file="LogReturns.csv", sep=",", header=TRUE, format="%Y-%m-%d", drop=FALSE))
 stocks$spclass <- ifelse(stocks$sp500>0,1,0)
+stocks <- stocks[0:600]
+Hi.quart.index.obs <- which(stocks[200:nrow(stocks),"sp500"]>=quantile(stocks[200:nrow(stocks),"sp500"])[4],arr.ind=T)[,1] 
+Lo.quart.index.obs <- which(stocks[200:nrow(stocks),"sp500"]<=quantile(stocks[200:nrow(stocks),"sp500"])[2],arr.ind=T)[,1]
+
 
 window.length <- 500
 horizon <- 10
@@ -236,22 +247,22 @@ tuned("rpart2", expand.grid(maxdepth=5))
 tuned("xgbLinear", expand.grid(nrounds=25, lambda=0.05, alpha=0.05,
                                eta=0.005))
 
-tuned("svmRadialSigma", expand.grid(C=10, sigma=0.01))
-tuned("svmPoly",expand.grid(degree=2,C=0.05, scale=0.1))
+# tuned("svmRadialSigma", expand.grid(C=10, sigma=0.01))
+# tuned("svmPoly",expand.grid(degree=2,C=0.05, scale=0.1))
 
-tuned("parRF",expand.grid(mtry=1))
-tuned("ranger",expand.grid(mtry=6, splitrule="extratrees", min.node.size=8))
-tuned("rf", expand.grid(mtry=3))
-tuned("RRF", expand.grid(mtry=3, coefReg=1.0, coefImp=0))
-tuned("RRFglobal",expand.grid(mtry=3, coefReg=1))
-tuned("rpart", expand.grid(cp=0.05))
-tuned("rpart1SE",NULL)
-tuned("xgbDART", expand.grid(nrounds=1, max_depth=1, eta=0.3,
-                               gamma=1, subsample=0.5,
-                               colsample_bytree=0.5, rate_drop=0.1,
-                               skip_drop=1, min_child_weight=2))
-tuned("xgbTree", expand.grid(nrounds=c(25,30), max_depth=c(1,2), eta=c(0.1,0.2),
-      gamma=c(0.3,0.5),colsample_bytree=c(0.1,0.5), min_child_weight=c(1,2), subsample=c(0.2,0.5)))
+# tuned("parRF",expand.grid(mtry=1))
+# tuned("ranger",expand.grid(mtry=6, splitrule="extratrees", min.node.size=8))
+# tuned("rf", expand.grid(mtry=3))
+# tuned("RRF", expand.grid(mtry=3, coefReg=1.0, coefImp=0))
+# tuned("RRFglobal",expand.grid(mtry=3, coefReg=1))
+# tuned("rpart", expand.grid(cp=0.05))
+# tuned("rpart1SE",NULL)
+# tuned("xgbDART", expand.grid(nrounds=1, max_depth=1, eta=0.3,
+#                                gamma=1, subsample=0.5,
+#                                colsample_bytree=0.5, rate_drop=0.1,
+#                                skip_drop=1, min_child_weight=2))
+# tuned("xgbTree", expand.grid(nrounds=c(25,30), max_depth=c(1,2), eta=c(0.1,0.2),
+#       gamma=c(0.3,0.5),colsample_bytree=c(0.1,0.5), min_child_weight=c(1,2), subsample=c(0.2,0.5)))
 ```
 
 #Predicted vs Observed Log Return
@@ -260,22 +271,22 @@ This plot the LogReturns of the SP500 with the predicted SP500 returns from the 
 
 ```{r echo=FALSE, include=TRUE}
 PredObs <- function(x){
-  PredObs <- cbind(xts(x["pred"], order.by = index(stocks[(window.length+1):(nrow(stocks)-(nrow(stocks)-window.length)%%horizon),])), stocks[(window.length+1):(nrow(stocks)-(nrow(stocks)-window.length)%%horizon),"sp500"])
+  PredObs <- cbind(xts(x["pred"], order.by = index(as.xts(stocks[(window.length+1):(nrow(stocks)-(nrow(stocks)-window.length)%%horizon),]))), stocks[(window.length+1):(nrow(stocks)-(nrow(stocks)-window.length)%%horizon),"sp500"])
   plot(PredObs[,2], col=alpha("black",0.85), lwd=2, main=paste0(substring(substitute(x),10)," Observed vs Predicted Return"))
   lines(PredObs[,1], col=alpha("red",0.75))
 }
 
 PredObs(predictedsvmLinear)
-PredObs(predictedsvmRadialSigma)         
-PredObs(predictedsvmPoly)
+# PredObs(predictedsvmRadialSigma)         
+# PredObs(predictedsvmPoly)
 PredObs(predictedcforest)
-PredObs(predictedparRF)
-PredObs(predictedranger)
-PredObs(predictedrf)
-PredObs(predictedRRF)
-PredObs(predictedRRFglobal)
-PredObs(predictedrpart)
-PredObs(predictedrpart1SE)
+# PredObs(predictedparRF)
+# PredObs(predictedranger)
+# PredObs(predictedrf)
+# PredObs(predictedRRF)
+# PredObs(predictedRRFglobal)
+# PredObs(predictedrpart)
+# PredObs(predictedrpart1SE)
 PredObs(predictedrpart2)
 PredObs(predictedxgbLinear)
 ```
@@ -285,22 +296,23 @@ PredObs(predictedxgbLinear)
 
 ```{r echo=FALSE, include=TRUE}
 pick <- function(x){
-  return (as.data.frame(x[c("RMSE","Rsquared","LowRMSE","HighRMSE","Accuracy","Kappa"),], make.name=T))
+  return (as.data.frame(x[c("RMSE","Rsquared","LowRMSE","HighRMSE","Accuracy","Kappa"), make.name=T]))
 }
 
-SummaryTable <- data.frame(pick(svmLinear)[1,],
-    pick(svmRadialSigma)[1,],
-    pick(svmPoly)[1,],
-    pick(cforest)[1,],
-    pick(parRF)[1,],
-    pick(ranger)[1,],
-    pick(rf)[1,],
-    pick(RRF)[1,],
-    pick(RRFglobal)[1,],
-    pick(rpart)[1,],
-    pick(rpart1SE)[1,],
-    pick(rpart2)[1,],
-    pick(xgbLinear)[1,])
+SummaryTable <- data.frame(pick(svmLinear),
+    # pick(svmRadialSigma)[1,],
+    # pick(svmPoly)[1,],
+    pick(cforest),
+    # pick(parRF)[1,],
+    # pick(ranger)[1,],
+    # pick(rf)[1,],
+    # pick(RRF)[1,],
+    # pick(RRFglobal)[1,],
+    # pick(rpart)[1,],
+    # pick(rpart1SE)[1,],
+    pick(rpart2),
+    pick(xgbLinear)
+    )
 ```
 
 ## RNN models
@@ -326,10 +338,12 @@ Early stopping measures stalling improvements and restores to the best weights b
 ```{r echo=FALSE, include=TRUE}
 library(keras)
 library(tensorflow)
+library(reticulate)
+tensorflow::tf_gpu_configured(verbose=T)
 
-X <-as.xts(subset(stocks, select= -c(sp500,spclass)))
-Y_regr <- as.xts(subset(stocks, select= sp500))
-Y_class <- as.xts(subset(stocks, select= spclass))
+X <- subset(stocks, select= -c(sp500,spclass))
+Y_regr <- subset(stocks, select= sp500)
+Y_class <- subset(stocks, select= spclass)
 
 window.length <- 500
 horizon <- 10
@@ -349,7 +363,7 @@ es <- callback_early_stopping(monitor = "loss",
 #LSTM
 
 
-```{r echo=FALSE, include=TRUE}
+```{r echo=TRUE, include=TRUE}
 #Classification
 
 model <- keras_model_sequential()
@@ -369,6 +383,7 @@ outputAccuracy_LSTM_tanh <- rep(0, length(testslices))
 outputProba_LSTM_tanh <- rep(0, nrow(stocks))
 
 for (i in 1:length(trainslices)){
+  print(i)
   X_train <- scale(X[trainslices[[i]]], center = T, scale = T)
   preproc_X <- preProcess(as.matrix(X_train))
   X_train <- array(X_train, dim=c(length(trainslices[[1]]),1,ncol(X)))
