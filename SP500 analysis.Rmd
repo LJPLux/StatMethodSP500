@@ -3,23 +3,32 @@ title: "SP500 analysis"
 output: github_document
 ---
 
-#Scrape the data
+#Load the packages
 
 ```{r setup, eval=F}
-knitr::opts_chunk$set(error = TRUE)
-```
-
-Historical prices are either scraped via AlphaVantage or downloadeded from Yahoo!Finance as .xlsx or.json and imported into R
-
-```{r include=TRUE, echo=FALSE}
+library(caret)
+library(e1071)
+library(party)
+library(reshape2)
+library(ROCR)
 library(ggplot2)
-library(AlphaVantageClient)
+library(keras)
+library(tensorflow)
+library(reticulate)
+library(doParallel)
+#library(AlphaVantageClient)
 library(stats)
 library(zoo)
 library(openxlsx)
 library(xts)
 library(imputeTS)
 library(jsonlite)
+set.seed(1001)
+```
+
+Historical prices are either scraped via AlphaVantage or downloadeded from Yahoo!Finance as .xlsx or.json and imported into R
+
+```{r Load in the data, echo=TRUE}
 
 # setAPIKey("0L5Z4NE0KRJNL31A")
 # scraping_ind <- function(x){
@@ -108,6 +117,13 @@ stock_df <- na_interpolation(stock_df,option="linear", maxgap=Inf)
 stock_log <- diff.xts(stock_df, lag = 1, log = T)
 write.csv(stock_log[-1], file="LogReturn.csv")
 stock_log <- stock_log[-1]
+
+stocks <- as.xts(read.zoo(file="LogReturns.csv", sep=",", header=TRUE, format="%Y-%m-%d", drop=FALSE))
+stocks$spclass <- ifelse(stocks$sp500>0,1,0)
+stocks <- stocks[,c("sp500","hsi","eu50","eu600","dax","cac","EURUSD","GBPUSD","USDJPY","Brent","spclass")]
+stocks <- stocks[0:600]
+Hi.quart.index.obs <- which(stocks[200:nrow(stocks),"sp500"]>=quantile(stocks[200:nrow(stocks),"sp500"])[4],arr.ind=T)[,1] 
+Lo.quart.index.obs <- which(stocks[200:nrow(stocks),"sp500"]<=quantile(stocks[200:nrow(stocks),"sp500"])[2],arr.ind=T)[,1]
 ```
 
 #Correlation matrix
@@ -181,20 +197,7 @@ gplots::heatmap.2(cor_matrix[-1,],Rowv = NA, Colv = NA, col= gplots::colorpanel(
 The following code will calculate the predictions made by the simple machine learning algorithms.
 The *tuned()* function takes as arguments the name of the algorithm a list with the specified hyperparameters.
 
-```{r ecco=FALSE, include=TRUE}
-library(caret)
-library(e1071)
-library(doParallel)
-library(party)
-library(reshape2)
-library(ROCR)
-set.seed(1001)
-stocks <- as.xts(read.zoo(file="LogReturns.csv", sep=",", header=TRUE, format="%Y-%m-%d", drop=FALSE))
-stocks$spclass <- ifelse(stocks$sp500>0,1,0)
-stocks <- stocks[0:600]
-Hi.quart.index.obs <- which(stocks[200:nrow(stocks),"sp500"]>=quantile(stocks[200:nrow(stocks),"sp500"])[4],arr.ind=T)[,1] 
-Lo.quart.index.obs <- which(stocks[200:nrow(stocks),"sp500"]<=quantile(stocks[200:nrow(stocks),"sp500"])[2],arr.ind=T)[,1]
-
+```{r echo=FALSE, include=TRUE}
 
 window.length <- 500
 horizon <- 10
@@ -336,11 +339,6 @@ for regression:
 Early stopping measures stalling improvements and restores to the best weights before the last (failed) 25 epochs.
 
 ```{r echo=FALSE, include=TRUE}
-library(keras)
-library(tensorflow)
-library(reticulate)
-tensorflow::tf_gpu_configured(verbose=T)
-
 X <- subset(stocks, select= -c(sp500,spclass))
 Y_regr <- subset(stocks, select= sp500)
 Y_class <- subset(stocks, select= spclass)
@@ -350,6 +348,7 @@ horizon <- 10
 n_batch <- 10
 n_epoch <- window.length/n_batch
 n_neurons <- 9
+threshold <- 0.5
 
 timeslices <- createTimeSlices(1:nrow(stocks),initialWindow = window.length, skip = horizon-1, horizon = horizon, fixedWindow = T)
 trainslices <- timeslices[[1]]
@@ -358,9 +357,10 @@ testslices <- timeslices[[2]]
 es <- callback_early_stopping(monitor = "loss", 
                               verbose = 1, patience = 25, 
                               restore_best_weights = T)
+doParallel::registerDoParallel(cores=4)
 ```
 
-#LSTM
+#LSTM classification
 
 
 ```{r echo=TRUE, include=TRUE}
@@ -383,7 +383,6 @@ outputAccuracy_LSTM_tanh <- rep(0, length(testslices))
 outputProba_LSTM_tanh <- rep(0, nrow(stocks))
 
 for (i in 1:length(trainslices)){
-  print(i)
   X_train <- scale(X[trainslices[[i]]], center = T, scale = T)
   preproc_X <- preProcess(as.matrix(X_train))
   X_train <- array(X_train, dim=c(length(trainslices[[1]]),1,ncol(X)))
@@ -397,21 +396,39 @@ for (i in 1:length(trainslices)){
   proba <- model %>% keras:::predict.keras.engine.training.Model(
     X_test, batch_size = n_batch, verbose = 0
   )
-  pred <- model %>% keras:::predict_classes(
-    X_test, batch_size = n_batch,  verbose = 0
-  )
+  # pred <- model %>% keras:::predict_classes(
+  #   X_test, batch_size = n_batch,  verbose = 0
+  # )
   acc <- model %>% keras:::evaluate.keras.engine.training.Model(
     X_test, Y_test, batch_size = n_batch, verbose=1
   )
   outputProba_LSTM_tanh[testslices[[i]]] <- proba
+  pred <- c()
+  for (n in 1:10){
+    if (proba[n] > threshold){
+      pred <- c(pred, 1)
+    }else{
+      pred <- c(pred, 0)
+    }
+  }
   outputClass_LSTM_tanh[testslices[[i]]] <- pred
   outputAccuracy_LSTM_tanh[i] <- acc[[2]]
 }
 outputClass_LSTM_tanh <- outputClass_LSTM_tanh[c((window.length+1):length(outputClass_LSTM_tanh))]
 outputProba_LSTM_tanh <- outputProba_LSTM_tanh[c((window.length+1):length(outputProba_LSTM_tanh))]
+rm(i)
+rm(n)
+```
 
-#Regression
 
+confusionMatrix(data = as.factor(outputClass_LSTM_tanh),
+                                                  reference = as.factor(stocks$spclass[c(501:4900)]),
+                                                  positive = "1")$overall
+                                                  
+                                                  
+#LSTM Regression
+
+```{r echo=TRUE, include=TRUE}
 model <- keras_model_sequential()
 model %>% layer_lstm(units = n_neurons, batch_input_shape = c(n_batch, 1, 9),
                      activation = "tanh",
@@ -446,7 +463,7 @@ outputPredicted_LSTM_tanh_v <- outputPredicted_LSTM_tanh_v[c((window.length+1):l
 mean(outputRMSE_LSTM_tanh_v)
 ```
 
-#GRU
+#GRU classification
 
 ```{r echo=FALSE, include=TRUE}
 #Classification
@@ -481,20 +498,31 @@ for (i in 1:length(trainslices)){
   proba <- model %>% keras:::predict.keras.engine.training.Model(
     X_test, batch_size = n_batch, verbose = 0
   )
-  pred <- model %>% keras:::predict_classes(
-    X_test, batch_size = n_batch,  verbose = 0
-  )
+  # pred <- model %>% keras:::predict_classes(
+  #   X_test, batch_size = n_batch,  verbose = 0
+  # )
   acc <- model %>% keras:::evaluate.keras.engine.training.Model(
     X_test, Y_test, batch_size = n_batch, verbose=1
   )
   outputProba_GRU_relu[testslices[[i]]] <- proba
+  pred <- c()
+  for (n in 1:10){
+    if (proba[n] > threshold){
+      pred <- c(pred, 1)
+    }else{
+      pred <- c(pred, 0)
+    }
+  }
   outputClass_GRU_relu[testslices[[i]]] <- pred
   outputAccuracy_GRU_relu[i] <- acc[[2]]
 }
 outputClass_GRU_relu <- outputClass_GRU_relu[c((window.length+1):length(outputClass_GRU_relu))]
 outputProba_GRU_relu <- outputProba_GRU_relu[c((window.length+1):length(outputProba_GRU_relu))]
+```
 
-#Regression
+#GRU Regression
+
+```{r echo=FALSE, include=TRUE}
 model <- keras_model_sequential()
 model %>% layer_gru(units = n_neurons,batch_input_shape = c(n_batch, 1, 9),
                     #input_shape = c(1,9),
