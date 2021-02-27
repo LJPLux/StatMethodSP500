@@ -223,13 +223,13 @@ for (i in 1:length(trainslices)){
     X_train, Y_train, epochs = n_epoch, batch_size = n_batch, 
     shuffle = F, verbose = 0, callbacks = es
   )
-  #the following when measuring regression error
+  if (model$loss == 'mean_squared_error'){
      pred <- model %>% keras:::predict.keras.engine.training.Model(
       X_test, batch_size = n_batch,  verbose = 1
     )
     outputPredicted[testslices[[i]]] <- pred
     outputRMSE[i] <- RMSE(pred, Y_test)
-  # the following when classifying
+  } else if (model$loss == 'binary_crossentropy'){
       proba <- model %>% keras:::predict.keras.engine.training.Model(
         X_test, batch_size = n_batch, verbose = 0
       )
@@ -247,5 +247,7 @@ for (i in 1:length(trainslices)){
       }
       outputClass[testslices[[i]]] <- pred
       outputAccuracy[i] <- acc[[2]]
-}
+  } else {
+    print('Please define loss function in model')
+  }
 ```
