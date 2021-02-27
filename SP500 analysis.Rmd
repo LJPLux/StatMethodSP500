@@ -8,7 +8,9 @@ output: github_document
 ```{r setup, eval=FALSE, fig.width=16, fig.height = 8, fig.align='center', error=TRUE}
 ```
 
-Historical prices are either scraped via AlphaVantage or downloadeded from Yahoo!Finance as .xlsx or.json and imported into R
+Historical prices are downloaded from Yahoo!Finance as .xlsx or.json and imported into R.
+Scraping via AlphaVantage has been possible before, but index scraping ahs been deprecated since.
+
 
 ```{r Load in the data, echo=TRUE}
 library(caret)
@@ -84,7 +86,7 @@ Brent <- as.xts(Brent)
 
 #Subset data
 
-Subset the data to have same start and end point
+Subset the data to have the same start and end point.
 
 ``` {r include=TRUE, echo=FALSE}
 sp500 <- sp500["2001-08-29/2019-05-15"]
@@ -108,7 +110,7 @@ Merge the data into a single dataframe and rename the columns.
 Assign a value of NA where prices are 0 in order to use the *na_interpolation* function to replace missing values in between dates.
 Then apply Log differencing to get the Log Returns of each data series.
 
-```{r include=TRUE, echo=FALSE,eval=TRUE}
+```{r include=TRUE, echo=FALSE}
 stock_df <- merge.xts(sp500[,5],hsi[,5],eu50[,5],eu600[,5],dax[,5],cac[,1],asx[,1],shanghai[,5],EURUSD[,4],GBPUSD[,4],USDJPY[,4],Gold[,1],Brent[,1], all=T)
 colnames(stock_df) <- c("sp500","hsi","eu50","eu600","dax","cac","asx","shanghai","EURUSD","GBPUSD","USDJPY","Gold","Brent")
 stock_df[stock_df == 0] <- NA
@@ -120,7 +122,6 @@ stock_log <- stock_log[-1]
 stocks <- as.xts(read.zoo(file="LogReturns.csv", sep=",", header=TRUE, format="%Y-%m-%d", drop=FALSE))
 stocks$spclass <- ifelse(stocks$sp500>0,1,0)
 stocks <- stocks[,c("sp500","hsi","eu50","eu600","dax","cac","EURUSD","GBPUSD","USDJPY","Brent","spclass")]
-stocks <- stocks[0:600]
 Hi.quart.index.obs <- which(stocks[200:nrow(stocks),"sp500"]>=quantile(stocks[200:nrow(stocks),"sp500"])[4],arr.ind=T)[,1] 
 Lo.quart.index.obs <- which(stocks[200:nrow(stocks),"sp500"]<=quantile(stocks[200:nrow(stocks),"sp500"])[2],arr.ind=T)[,1]
 ```
@@ -187,15 +188,17 @@ Color-code the correlation values from the correlation matrix using the threshol
 # plot.new()
 # par(mar=c(1,1,1,1))
 gplots::heatmap.2(cor_matrix[-1,],Rowv = NA, Colv = NA, col= gplots::colorpanel(5,low="red",mid="yellow",high="green"),
-                  dendrogram = "none", breaks=c(-0.1,0,0.15,0.3,0.5,1),
-                  trace="none", main = "Correlogram of the SP500")
-# ,offsetRow = 0.5, offsetCol = 0.5)  lhei = c(0,8),lwid=c(0,4)
+                  dendrogram = "none", breaks=c(-0.1,0,0.15,0.3,0.5,1), key=TRUE,
+                  trace="none", main = "Correlogram of the SP500",offsetRow = 0.5, offsetCol = 0.5, lhei = c(2,5),lwid=c(3,6))
 ```
 
 
 # Modeling
 
 The following code will calculate the predictions made by the simple machine learning algorithms.
+the *trainControl* function defines the control frame in which the fitting is done.
+Use *timeslice* as cross-validation method, window size of 500 observations, horizon of 10 observations, which each iteration jump 9 steps, keep window size fixed, save the best predictions and validate on the last 10% of the training data.
+
 The *tuned()* function takes as arguments the name of the algorithm a list with the specified hyperparameters.
 
 ```{r echo=FALSE, include=TRUE, message=FALSE}
@@ -270,7 +273,7 @@ tuned("xgbLinear", expand.grid(nrounds=25, lambda=0.05, alpha=0.05,
 
 #Predicted vs Observed Log Return
 
-This plot the LogReturns of the SP500 with the predicted SP500 returns from the ML model.
+This plot displas the LogReturns of the SP500 with the predicted SP500 returns from the ML model.
 
 ```{r echo=FALSE, include=TRUE}
 library(scales)
@@ -427,11 +430,6 @@ rm(n)
 ```
 
 
-confusionMatrix(data = as.factor(outputClass_LSTM_tanh),
-                                                  reference = as.factor(stocks$spclass[c(501:4900)]),
-                                                  positive = "1")$overall
-                                                  
-                                                  
 #LSTM Regression
 
 ```{r echo=TRUE, include=TRUE}
@@ -705,6 +703,8 @@ scatterplot(df.predicted$GRU)
 
 #Density plot
 
+Compare the distributions of the predicted values with the true values.
+
 ```{r echo=FALSE, include=TRUE}
 ggplot(melt(df.predicted, variable.name ="model"), aes(x = value, color = model))+
   geom_density(aes(linetype=model), size=1)+
@@ -717,7 +717,7 @@ ggplot(melt(df.predicted, variable.name ="model"), aes(x = value, color = model)
 
 #Extrapolated price chart from the start with predicted returns
 
-Plot to visualize which prediction performance of each model lies the nearest to the original history of the SP500 price
+Plot to visualize which prediction performance of each model lies the nearest to the original history of the SP500 price.
 
 ```{r echo=FALSE, include=TRUE}
 plot(stock_df["2003-07-31/2019-05-15",1], ylim=c(1400,25000), lty=1, lwd=1,col="black", main="Price trend with predicted returns", log='y')
