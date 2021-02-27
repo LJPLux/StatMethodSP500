@@ -223,11 +223,13 @@ for (i in 1:length(trainslices)){
     X_train, Y_train, epochs = n_epoch, batch_size = n_batch, 
     shuffle = F, verbose = 0, callbacks = es
   )
-  pred <- model %>% keras:::predict_classes(
-    X_test, batch_size = n_batch,  verbose = 0
-  )
-  outputClass[testslices[[i]]] <- pred
-  # the following two only when classifying
+  #the following when measuring regression error
+     pred <- model %>% keras:::predict.keras.engine.training.Model(
+      X_test, batch_size = n_batch,  verbose = 1
+    )
+    outputPredicted[testslices[[i]]] <- pred
+    outputRMSE[i] <- RMSE(pred, Y_test)
+  # the following when classifying
       proba <- model %>% keras:::predict.keras.engine.training.Model(
         X_test, batch_size = n_batch, verbose = 0
       )
@@ -235,6 +237,15 @@ for (i in 1:length(trainslices)){
         X_test, Y_test, batch_size = n_batch, verbose=1
       )
       outputProba[testslices[[i]]] <- proba
+      pred <- c()
+      for (n in 1:length(horizon)){
+        if (proba[n] > threshold){
+          pred <- c(pred, 1)
+        }else{
+          pred <- c(pred, 0)
+        }
+      }
+      outputClass[testslices[[i]]] <- pred
       outputAccuracy[i] <- acc[[2]]
 }
 ```
