@@ -592,6 +592,13 @@ text(0.825,0.75,labels = "AUC values", pos=1, font=2, cex=0.6)
 #Plot of predicted vs observed LogReturns on timeline
 
 ```{r echo=FALSE, include=TRUE}
+df.predicted <- data.frame(sp500 = stocks$sp500[c(501:nrow(stocks)],
+                           SVM = predictedsvmLinear$pred,
+                           RF = predictedcforest$pred,
+                           DT = predictedrpart2$pred,
+                           XGB = predictedxgbLinear$pred,
+                           GRU = outputPredicted_GRU_relu_v,
+                           LSTM = outputPredicted_LSTM_tanh_v)
 plotit <- function(expression,activation){
   abc <- cbind(xts(expression, order.by = index(stocks[(window.length+1):nrow(stocks),])), stocks[(window.length+1):nrow(stocks),"sp500"])
   plot(abc, col=c(alpha("red",0.65),alpha("black",0.85)), lwd=c(1,2), main=activation, multi.panel = F, type="l", yaxis.same = T, )
